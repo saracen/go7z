@@ -129,12 +129,14 @@ func ReadCoderInfo(r io.Reader) (*CoderInfo, error) {
 	isComplexCoder := attributes&0x10 > 0
 	hasAttributes := attributes&0x20 > 0
 
-	b := make([]byte, codecIDSize)
-	if _, err = r.Read(b); err != nil {
-		return nil, err
-	}
-	for i := codecIDSize; i > 0; i-- {
-		coderInfo.CodecID |= uint32(b[i-1]) << ((codecIDSize - i) * 8)
+	if codecIDSize > 0 {
+		b := make([]byte, codecIDSize)
+		if _, err = r.Read(b); err != nil {
+			return nil, err
+		}
+		for i := codecIDSize; i > 0; i-- {
+			coderInfo.CodecID |= uint32(b[i-1]) << ((codecIDSize - i) * 8)
+		}
 	}
 
 	coderInfo.NumInStreams = 1
