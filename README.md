@@ -10,6 +10,7 @@ Features:
 - Decompresses:
   - [LZMA](https://github.com/ulikunitz/xz)
   - [LZMA2](https://github.com/ulikunitz/xz)
+  - Delta
   - BCJ2
   - bzip2
 

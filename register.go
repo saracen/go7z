@@ -28,6 +28,15 @@ func init() {
 		return r[0], nil
 	}))
 
+	// delta
+	RegisterDecompressor(0x03, Decompressor(func(r []io.Reader, options []byte, unpackSize uint64) (io.Reader, error) {
+		if len(r) != 1 || len(options) > 1 {
+			return nil, ErrNotSupported
+		}
+
+		return filters.NewDeltaDecoder(r[0], uint(options[0])+1, int64(unpackSize))
+	}))
+
 	// lzma
 	RegisterDecompressor(0x030101, Decompressor(func(r []io.Reader, options []byte, unpackSize uint64) (io.Reader, error) {
 		if len(r) != 1 {
