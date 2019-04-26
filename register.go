@@ -3,6 +3,7 @@ package go7z
 import (
 	"bytes"
 	"compress/bzip2"
+	"compress/flate"
 	"encoding/binary"
 	"io"
 	"sync"
@@ -30,7 +31,7 @@ func init() {
 
 	// delta
 	RegisterDecompressor(0x03, Decompressor(func(r []io.Reader, options []byte, unpackSize uint64) (io.Reader, error) {
-		if len(r) != 1 || len(options) > 1 {
+		if len(r) != 1 || len(options) == 0 || len(options) > 1 {
 			return nil, ErrNotSupported
 		}
 
@@ -72,6 +73,14 @@ func init() {
 			return nil, ErrNotSupported
 		}
 		return filters.NewBCJ2Decoder(r[0], r[1], r[2], r[3], int64(unpackSize))
+	}))
+
+	// deflate
+	RegisterDecompressor(0x40108, Decompressor(func(r []io.Reader, options []byte, unpackSize uint64) (io.Reader, error) {
+		if len(r) != 1 {
+			return nil, ErrNotSupported
+		}
+		return flate.NewReader(r[0]), nil
 	}))
 
 	// bzip2

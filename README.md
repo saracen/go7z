@@ -13,6 +13,7 @@ Features:
   - Delta
   - BCJ2
   - bzip2
+  - deflate
 
 ## Usage
 Extracting an archive:
