@@ -4,9 +4,9 @@ A native Go 7z archive reader.
 
 Features:
 - Development in early stages.
-- Literally no tests.
-- High probability of crashes.
-- High probability of using all memory.
+- Very little tests.
+- Medium probability of crashes.
+- Medium probability of using all memory.
 - Decompresses:
   - [LZMA](https://github.com/ulikunitz/xz)
   - [LZMA2](https://github.com/ulikunitz/xz)

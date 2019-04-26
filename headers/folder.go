@@ -1,7 +1,43 @@
 package headers
 
 import (
+	"errors"
 	"io"
+)
+
+const (
+	// MaxInOutStreams is the maximum allowed stream inputs/outputs into/out
+	// of a coder.
+	MaxInOutStreams = 4
+
+	// MaxPropertyDataSize is the size in bytes supported for coder property data.
+	MaxPropertyDataSize = 128
+
+	// MaxCodersInFolder is the maximum number of coders allowed to be
+	// specified in a folder.
+	MaxCodersInFolder = 4
+
+	// MaxPackedStreamsInFolder is the maximum number of packed streams allowed
+	// to be in a folder.
+	MaxPackedStreamsInFolder = 4
+)
+
+var (
+	// ErrInvalidStreamCount is the error returned when the input/output stream
+	// count for a coder is <= 0 || > MaxInOutStreams.
+	ErrInvalidStreamCount = errors.New("invalid in/out stream count")
+
+	// ErrInvalidPropertyDataSize is the error returned when the property data
+	// size is <= 0 || > MaxInOutStreams.
+	ErrInvalidPropertyDataSize = errors.New("invalid property data size")
+
+	// ErrInvalidCoderInFolderCount is the error returned when the number of
+	// coders in a folder is <= 0 || > MaxCodersInFolder.
+	ErrInvalidCoderInFolderCount = errors.New("invalid coder in folder count")
+
+	// ErrInvalidPackedStreamsCount is the error returned when the number of
+	// packed streams exceeds MaxPackedStreamsInFolder
+	ErrInvalidPackedStreamsCount = errors.New("invalid packed streams count")
 )
 
 // Folder is a structure containing information on how a solid block was
@@ -72,6 +108,9 @@ func ReadFolder(r io.Reader) (*Folder, error) {
 	if err != nil {
 		return nil, err
 	}
+	if numCoders == 0 || numCoders > MaxCodersInFolder {
+		return nil, ErrInvalidCoderInFolderCount
+	}
 
 	folder.CoderInfo = make([]*CoderInfo, numCoders)
 	for i := range folder.CoderInfo {
@@ -80,7 +119,7 @@ func ReadFolder(r io.Reader) (*Folder, error) {
 		}
 	}
 
-	folder.BindPairsInfo = make([]*BindPairsInfo, folder.NumOutStreamsTotal()-1)
+	folder.BindPairsInfo = make([]*BindPairsInfo, numCoders-1)
 	for i := range folder.BindPairsInfo {
 		if folder.BindPairsInfo[i], err = ReadBindPairsInfo(r); err != nil {
 			return nil, err
@@ -90,6 +129,10 @@ func ReadFolder(r io.Reader) (*Folder, error) {
 	numInStreamsTotal := folder.NumInStreamsTotal()
 	numPackedStreams := numInStreamsTotal - len(folder.BindPairsInfo)
 	if numPackedStreams > 1 {
+		if numPackedStreams > MaxPackedStreamsInFolder {
+			return nil, ErrInvalidPackedStreamsCount
+		}
+
 		folder.PackedIndices = make([]int, numPackedStreams)
 		for i := range folder.PackedIndices {
 			if folder.PackedIndices[i], err = ReadNumberInt(r); err != nil {
@@ -145,8 +188,15 @@ func ReadCoderInfo(r io.Reader) (*CoderInfo, error) {
 		if coderInfo.NumInStreams, err = ReadNumberInt(r); err != nil {
 			return nil, err
 		}
+		if coderInfo.NumInStreams == 0 || coderInfo.NumInStreams > MaxInOutStreams {
+			return nil, ErrInvalidStreamCount
+		}
+
 		if coderInfo.NumOutStreams, err = ReadNumberInt(r); err != nil {
 			return nil, err
+		}
+		if coderInfo.NumOutStreams == 0 || coderInfo.NumOutStreams > MaxInOutStreams {
+			return nil, ErrInvalidStreamCount
 		}
 	}
 
@@ -154,6 +204,9 @@ func ReadCoderInfo(r io.Reader) (*CoderInfo, error) {
 		size, err := ReadNumberInt(r)
 		if err != nil {
 			return nil, err
+		}
+		if size <= 0 || size > MaxPropertyDataSize {
+			return nil, ErrInvalidPropertyDataSize
 		}
 
 		coderInfo.Properties = make([]byte, size)

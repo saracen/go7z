@@ -1,6 +1,15 @@
 package headers
 
-import "io"
+import (
+	"errors"
+	"io"
+)
+
+const MaxFolderCount = 1 << 30
+
+// ErrInvalidCountExceeded is returned when the folder count is
+// < 0 || > MaxFolderCount
+var ErrInvalidCountExceeded = errors.New("invalid folder count")
 
 // UnpackInfo is a structure containing folders.
 type UnpackInfo struct {
@@ -17,6 +26,9 @@ func ReadUnpackInfo(r io.Reader) (*UnpackInfo, error) {
 	numFolders, err := ReadNumberInt(r)
 	if err != nil {
 		return nil, err
+	}
+	if numFolders > MaxFolderCount {
+		return nil, ErrInvalidCountExceeded
 	}
 
 	unpackInfo := &UnpackInfo{}

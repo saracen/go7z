@@ -2,10 +2,15 @@ package headers
 
 import (
 	"encoding/binary"
+	"errors"
 	"io"
 	"time"
 	"unicode/utf16"
 )
+
+// ErrInvalidFileCount is returned when the file count read from the stream
+// exceeds the caller supplied maxFileCount.
+var ErrInvalidFileCount = errors.New("invalid file count")
 
 // FileInfo is a structure containing the information of an archived file.
 type FileInfo struct {
@@ -24,10 +29,13 @@ type FileInfo struct {
 }
 
 // ReadFilesInfo reads the files info structure.
-func ReadFilesInfo(r io.Reader) ([]*FileInfo, error) {
+func ReadFilesInfo(r io.Reader, maxFileCount int) ([]*FileInfo, error) {
 	numFiles, err := ReadNumberInt(r)
 	if err != nil {
 		return nil, err
+	}
+	if numFiles > maxFileCount {
+		return nil, ErrInvalidFileCount
 	}
 
 	fileInfo := make([]*FileInfo, numFiles)

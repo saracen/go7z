@@ -36,6 +36,8 @@ const (
 	k7zDummy
 )
 
+const MaxNumber = 0x7FFFFFFF
+
 var (
 	// ErrUnexpectedPropertyID is returned when we read a property id that was
 	// either unexpected, or we don't support.
@@ -55,6 +57,9 @@ var (
 	// ErrPackInfoCRCsNotImplemented is returned if a CRC property id is
 	// encountered whilst reading packinfo.
 	ErrPackInfoCRCsNotImplemented = errors.New("packinfo crcs are not implemented")
+
+	// ErrInvalidNumber is returned when a number read exceeds 0x7FFFFFFF
+	ErrInvalidNumber = errors.New("invalid number")
 )
 
 // ReadByte reads a single byte.
@@ -107,6 +112,10 @@ func ReadNumber(r io.Reader) (uint64, error) {
 // ReadNumberInt is the same as ReadNumber, but cast to int.
 func ReadNumberInt(r io.Reader) (int, error) {
 	u64, err := ReadNumber(r)
+	if u64 > MaxNumber {
+		return 0, ErrInvalidNumber
+	}
+
 	return int(u64), err
 }
 

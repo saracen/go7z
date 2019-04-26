@@ -2,8 +2,8 @@ package go7z
 
 import (
 	"bufio"
-	"encoding/binary"
 	"errors"
+	"fmt"
 	"hash/crc32"
 	"io"
 	"os"
@@ -62,7 +62,7 @@ func OpenReader(name string) (*ReadCloser, error) {
 	}
 
 	r := new(ReadCloser)
-	if err := r.init(f, fi.Size()); err != nil {
+	if err := r.init(f, fi.Size(), false); err != nil {
 		f.Close()
 		return nil, err
 	}
@@ -75,33 +75,39 @@ func OpenReader(name string) (*ReadCloser, error) {
 // have the given size in bytes.
 func NewReader(r io.ReaderAt, size int64) (*Reader, error) {
 	szr := new(Reader)
-	if err := szr.init(r, size); err != nil {
+	if err := szr.init(r, size, false); err != nil {
 		return nil, err
 	}
 	return szr, nil
 }
 
-func (sz *Reader) init(r io.ReaderAt, size int64) error {
-	var signatureHeader headers.SignatureHeader
-
+func (sz *Reader) init(r io.ReaderAt, size int64, ignoreChecksumError bool) error {
 	sz.r = io.NewSectionReader(r, 0, size)
-
-	if err := binary.Read(sz.r, binary.LittleEndian, &signatureHeader); err != nil {
+	signatureHeader, err := headers.ReadSignatureHeader(sz.r)
+	if err != nil {
+		if !(ignoreChecksumError && err == headers.ErrChecksumMismatch) {
+			return err
+		}
+	}
+	if _, err := sz.r.Seek(signatureHeader.StartHeader.NextHeaderOffset, io.SeekCurrent); err != nil {
 		return err
 	}
-	if _, err := sz.r.Seek(signatureHeader.StartHeader.NextHeaderOffset, 1); err != nil {
-		return err
+
+	if signatureHeader.StartHeader.NextHeaderSize > size-headers.SignatureHeaderSize {
+		return io.ErrUnexpectedEOF
 	}
 
 	crc := crc32.NewIEEE()
-	tee := io.TeeReader(io.LimitReader(bufio.NewReader(sz.r), signatureHeader.StartHeader.NextHeaderSize), crc)
+	tee := io.TeeReader(bufio.NewReader(io.LimitReader(sz.r, signatureHeader.StartHeader.NextHeaderSize)), crc)
 
-	header, encoded, err := headers.ReadPackedStreamsForHeaders(tee)
+	header, encoded, err := headers.ReadPackedStreamsForHeaders(&io.LimitedReader{tee, signatureHeader.StartHeader.NextHeaderSize})
 	if err != nil {
 		return err
 	}
 	if crc.Sum32() != signatureHeader.StartHeader.NextHeaderCRC {
-		return headers.ErrChecksumMismatch
+		if !ignoreChecksumError {
+			return headers.ErrChecksumMismatch
+		}
 	}
 
 	if encoded != nil {
@@ -116,18 +122,18 @@ func (sz *Reader) init(r io.ReaderAt, size int64) error {
 			return err
 		}
 
-		header, _, err = headers.ReadPackedStreamsForHeaders(solidblocks[0])
+		header, _, err = headers.ReadPackedStreamsForHeaders(&io.LimitedReader{solidblocks[0], solidblocks[0].Size()})
 		if err != nil {
 			return err
-		}
-		if header == nil {
-			return ErrNotSupported
 		}
 		if err = solidblocks[0].Next(); err != io.EOF {
 			return ErrNotSupported
 		}
 	}
 
+	if header == nil {
+		return ErrNotSupported
+	}
 	sz.header = header
 	sz.solidblocks, err = extract(sz.r, sz.header.MainStreamsInfo)
 
@@ -165,7 +171,7 @@ func extract(r io.ReaderAt, streamsInfo *headers.StreamsInfo) ([]*solidblock.Sol
 		crcs = streamsInfo.SubStreamsInfo.Digests
 	}
 
-	offset := int64(32)
+	offset := int64(headers.SignatureHeaderSize)
 	offset += int64(streamsInfo.PackInfo.PackPos)
 	packedIndicesOffset := 0
 
@@ -198,6 +204,10 @@ func extract(r io.ReaderAt, streamsInfo *headers.StreamsInfo) ([]*solidblock.Sol
 
 		// setup initial inputs
 		for index, input := range folder.PackedIndices {
+			if packedIndicesOffset+index >= len(streamsInfo.PackInfo.PackSizes) {
+				return nil, fmt.Errorf("folder references invalid packinfo")
+			}
+
 			size := int64(streamsInfo.PackInfo.PackSizes[packedIndicesOffset+index])
 			binder.Reader(bufio.NewReader(io.NewSectionReader(r, offset, size)), input)
 			offset += size
@@ -217,12 +227,25 @@ func extract(r io.ReaderAt, streamsInfo *headers.StreamsInfo) ([]*solidblock.Sol
 		if len(outputs) != 1 {
 			return solidblocks, ErrNotSupported
 		}
+		if outputs[0] == nil {
+			return nil, ErrNotSupported
+		}
 
 		var sizesInFolder []uint64
 		var crcsInFolder []uint32
 		if streamsInfo.SubStreamsInfo != nil {
-			sizesInFolder = sizes[:streamsInfo.SubStreamsInfo.NumUnpackStreamsInFolders[i]]
-			crcsInFolder = crcs[:streamsInfo.SubStreamsInfo.NumUnpackStreamsInFolders[i]]
+			numUnpackStreamsInFolders := streamsInfo.SubStreamsInfo.NumUnpackStreamsInFolders
+			if i >= len(numUnpackStreamsInFolders) {
+				return nil, fmt.Errorf("folder references invalid unpack stream")
+			}
+
+			off := numUnpackStreamsInFolders[i]
+			if off > len(sizes) || off > len(crcs) {
+				return nil, fmt.Errorf("folder references invalid unpack size or digest")
+			}
+
+			sizesInFolder = sizes[:off]
+			crcsInFolder = crcs[:off]
 			sizes = sizes[len(sizesInFolder):]
 			crcs = crcs[len(crcsInFolder):]
 		} else {
@@ -249,6 +272,9 @@ func (sz *Reader) next() (*headers.FileInfo, error) {
 
 	if sz.solidblocks[sz.folderIndex].Next() == io.EOF {
 		sz.folderIndex++
+		if sz.folderIndex >= len(sz.solidblocks) {
+			return nil, io.EOF
+		}
 		sz.solidblocks[sz.folderIndex].Next()
 	}
 

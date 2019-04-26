@@ -33,11 +33,19 @@ func ReadStreamsInfo(r io.Reader) (*StreamsInfo, error) {
 			}
 
 		case k7zSubStreamsInfo:
+			if streamsInfo.UnpackInfo == nil {
+				return nil, ErrUnexpectedPropertyID
+			}
+
 			if streamsInfo.SubStreamsInfo, err = ReadSubStreamsInfo(r, streamsInfo.UnpackInfo); err != nil {
 				return nil, err
 			}
 
 		case k7zEnd:
+			if streamsInfo.PackInfo == nil || streamsInfo.UnpackInfo == nil {
+				return nil, ErrUnexpectedPropertyID
+			}
+
 			return streamsInfo, nil
 
 		default:
