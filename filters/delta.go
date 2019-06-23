@@ -39,7 +39,7 @@ func (d *DeltaDecoder) Read(p []byte) (int, error) {
 	}
 
 	copy(d.state[:], buf[j:d.delta])
-	copy(d.state[d.delta-j:], buf[j:])
+	copy(d.state[d.delta-j:], buf[:j])
 
 	return n, err
 }
