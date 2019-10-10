@@ -7,6 +7,7 @@ import (
 	"hash/crc32"
 	"io"
 	"os"
+	"sync"
 
 	"github.com/saracen/go7z/headers"
 	"github.com/saracen/solidblock"
@@ -33,7 +34,38 @@ type Reader struct {
 	fileIndex   int
 	emptyStream bool
 
-	solidblocks []*solidblock.Solidblock
+	folders []*folderReader
+
+	Options ReaderOptions
+}
+
+// ReaderOptions are optional options to configure a 7z archive reader.
+type ReaderOptions struct {
+	password string
+	cb       func() string
+}
+
+// SetPassword sets the password used for extraction.
+func (o *ReaderOptions) SetPassword(password string) {
+	o.password = password
+}
+
+// SetPasswordCallback sets the callback thats used if a password is required,
+// but wasn't supplied with SetPassword()
+func (o *ReaderOptions) SetPasswordCallback(cb func() string) {
+	o.cb = cb
+}
+
+// Password returns the set password. This will call the password callback
+// supplied to SetPasswordCallback() if no password is set.
+func (o *ReaderOptions) Password() string {
+	if o.password != "" {
+		return o.password
+	}
+	if o.cb != nil {
+		o.password = o.cb()
+	}
+	return o.password
 }
 
 // ReadCloser provides an io.ReadCloser for the archive when opened with
@@ -111,22 +143,23 @@ func (sz *Reader) init(r io.ReaderAt, size int64, ignoreChecksumError bool) erro
 	}
 
 	if encoded != nil {
-		solidblocks, err := extract(sz.r, encoded)
+		folders, err := sz.extract(encoded)
 		if err != nil {
 			return err
 		}
-		if len(solidblocks) != 1 {
+		if len(folders) != 1 {
 			return ErrNotSupported
 		}
-		if err = solidblocks[0].Next(); err != nil {
+		if err = folders[0].Next(); err != nil {
 			return err
 		}
 
-		header, _, err = headers.ReadPackedStreamsForHeaders(&io.LimitedReader{solidblocks[0], solidblocks[0].Size()})
+		header, _, err = headers.ReadPackedStreamsForHeaders(&io.LimitedReader{folders[0].sb, folders[0].sb.Size()})
 		if err != nil {
 			return err
 		}
-		if err = solidblocks[0].Next(); err != io.EOF {
+
+		if err = folders[0].Next(); err != io.EOF {
 			return ErrNotSupported
 		}
 	}
@@ -135,7 +168,7 @@ func (sz *Reader) init(r io.ReaderAt, size int64, ignoreChecksumError bool) erro
 		return ErrNotSupported
 	}
 	sz.header = header
-	sz.solidblocks, err = extract(sz.r, sz.header.MainStreamsInfo)
+	sz.folders, err = sz.extract(sz.header.MainStreamsInfo)
 
 	return err
 }
@@ -163,7 +196,7 @@ func (sz *Reader) nextFileInfo() *headers.FileInfo {
 	return nil
 }
 
-func extract(r io.ReaderAt, streamsInfo *headers.StreamsInfo) ([]*solidblock.Solidblock, error) {
+func (sz *Reader) extract(streamsInfo *headers.StreamsInfo) ([]*folderReader, error) {
 	var sizes []uint64
 	var crcs []uint32
 	if streamsInfo.SubStreamsInfo != nil {
@@ -175,13 +208,15 @@ func extract(r io.ReaderAt, streamsInfo *headers.StreamsInfo) ([]*solidblock.Sol
 	offset += int64(streamsInfo.PackInfo.PackPos)
 	packedIndicesOffset := 0
 
-	var solidblocks []*solidblock.Solidblock
+	var folders []*folderReader
 	for i, folder := range streamsInfo.UnpackInfo.Folders {
 		if len(folder.PackedIndices) == 0 {
 			folder.PackedIndices = []int{0}
 		}
 
-		binder := solidblock.Binder{}
+		fr := &folderReader{}
+		fr.inputs = make(map[int]io.Reader)
+		fr.binder = solidblock.Binder{}
 
 		// setup codecs
 		for j := range folder.CoderInfo {
@@ -190,16 +225,16 @@ func extract(r io.ReaderAt, streamsInfo *headers.StreamsInfo) ([]*solidblock.Sol
 
 			d := decompressor(coderInfo.CodecID)
 			if d == nil {
-				return solidblocks, ErrDecompressorNotFound
+				return folders, ErrDecompressorNotFound
 			}
 
 			fn := func(in []io.Reader) ([]io.Reader, error) {
-				r, err := d(in, coderInfo.Properties, size)
+				r, err := d(in, coderInfo.Properties, size, &sz.Options)
 
 				return []io.Reader{r}, err
 			}
 
-			binder.AddCodec(fn, coderInfo.NumInStreams, coderInfo.NumOutStreams)
+			fr.binder.AddCodec(fn, coderInfo.NumInStreams, coderInfo.NumOutStreams)
 		}
 
 		// setup initial inputs
@@ -209,30 +244,16 @@ func extract(r io.ReaderAt, streamsInfo *headers.StreamsInfo) ([]*solidblock.Sol
 			}
 
 			size := int64(streamsInfo.PackInfo.PackSizes[packedIndicesOffset+index])
-			binder.Reader(bufio.NewReader(io.NewSectionReader(r, offset, size)), input)
+			fr.inputs[input] = io.NewSectionReader(sz.r, offset, size)
 			offset += size
 		}
 		packedIndicesOffset += len(folder.PackedIndices)
 
 		// setup pairs
 		for _, bindPairsInfo := range folder.BindPairsInfo {
-			binder.Pair(bindPairsInfo.InIndex, bindPairsInfo.OutIndex)
+			fr.binder.Pair(bindPairsInfo.InIndex, bindPairsInfo.OutIndex)
 		}
 
-		outputs, err := binder.Outputs()
-		if err != nil {
-			return solidblocks, err
-		}
-
-		if len(outputs) != 1 {
-			return solidblocks, ErrNotSupported
-		}
-		if outputs[0] == nil {
-			return nil, ErrNotSupported
-		}
-
-		var sizesInFolder []uint64
-		var crcsInFolder []uint32
 		if streamsInfo.SubStreamsInfo != nil {
 			numUnpackStreamsInFolders := streamsInfo.SubStreamsInfo.NumUnpackStreamsInFolders
 			if i >= len(numUnpackStreamsInFolders) {
@@ -244,19 +265,74 @@ func extract(r io.ReaderAt, streamsInfo *headers.StreamsInfo) ([]*solidblock.Sol
 				return nil, fmt.Errorf("folder references invalid unpack size or digest")
 			}
 
-			sizesInFolder = sizes[:off]
-			crcsInFolder = crcs[:off]
-			sizes = sizes[len(sizesInFolder):]
-			crcs = crcs[len(crcsInFolder):]
+			fr.sizes = sizes[:off]
+			fr.crcs = crcs[:off]
+			sizes = sizes[len(fr.sizes):]
+			crcs = crcs[len(fr.crcs):]
 		} else {
-			sizesInFolder = []uint64{folder.UnpackSize()}
-			crcsInFolder = []uint32{folder.UnpackCRC}
+			fr.sizes = []uint64{folder.UnpackSize()}
+			fr.crcs = []uint32{folder.UnpackCRC}
 		}
 
-		solidblocks = append(solidblocks, solidblock.New(outputs[0], sizesInFolder, crcsInFolder))
+		folders = append(folders, fr)
 	}
 
-	return solidblocks, nil
+	return folders, nil
+}
+
+type folderReader struct {
+	binder solidblock.Binder
+	sizes  []uint64
+	crcs   []uint32
+
+	inputs map[int]io.Reader
+
+	bufs []*bufio.Reader
+
+	sb *solidblock.Solidblock
+}
+
+var bufioReaderPool = sync.Pool{
+	New: func() interface{} {
+		return bufio.NewReaderSize(nil, 32*1024)
+	},
+}
+
+func (fr *folderReader) Next() error {
+	if fr.sb == nil {
+
+		fr.bufs = make([]*bufio.Reader, 0, len(fr.inputs))
+		for in, r := range fr.inputs {
+			br := bufioReaderPool.Get().(*bufio.Reader)
+			br.Reset(r)
+			fr.bufs = append(fr.bufs, br)
+
+			fr.binder.Reader(br, in)
+		}
+
+		outputs, err := fr.binder.Outputs()
+		if err != nil {
+			return err
+		}
+		if len(outputs) != 1 {
+			return ErrNotSupported
+		}
+		if outputs[0] == nil {
+			return ErrNotSupported
+		}
+
+		fr.sb = solidblock.New(outputs[0], fr.sizes, fr.crcs)
+	}
+
+	return fr.sb.Next()
+}
+
+func (fr *folderReader) Close() error {
+	for _, buf := range fr.bufs {
+		bufioReaderPool.Put(buf)
+	}
+	fr.bufs = nil
+	return nil
 }
 
 func (sz *Reader) next() (*headers.FileInfo, error) {
@@ -270,12 +346,13 @@ func (sz *Reader) next() (*headers.FileInfo, error) {
 		return fileInfo, nil
 	}
 
-	if sz.solidblocks[sz.folderIndex].Next() == io.EOF {
+	if sz.folders[sz.folderIndex].Next() == io.EOF {
+		sz.folders[sz.folderIndex].Close()
 		sz.folderIndex++
-		if sz.folderIndex >= len(sz.solidblocks) {
+		if sz.folderIndex >= len(sz.folders) {
 			return nil, io.EOF
 		}
-		sz.solidblocks[sz.folderIndex].Next()
+		sz.folders[sz.folderIndex].Next()
 	}
 
 	return fileInfo, nil
@@ -292,7 +369,7 @@ func (sz *Reader) Read(p []byte) (int, error) {
 		return 0, io.EOF
 	}
 
-	n, err := sz.solidblocks[sz.folderIndex].Read(p)
+	n, err := sz.folders[sz.folderIndex].sb.Read(p)
 	if err != nil && err != io.EOF {
 		sz.err = err
 	}

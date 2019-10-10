@@ -14,7 +14,7 @@ import (
 
 // Decompressor is a handler function called when a registered decompressor is
 // initialized.
-type Decompressor func(r []io.Reader, options []byte, unpackSize uint64) (io.Reader, error)
+type Decompressor func(r []io.Reader, options []byte, unpackSize uint64, ro *ReaderOptions) (io.Reader, error)
 
 var (
 	decompressors sync.Map // map[uint32]Decompressor
@@ -22,7 +22,7 @@ var (
 
 func init() {
 	// copy
-	RegisterDecompressor(0x00, Decompressor(func(r []io.Reader, options []byte, unpackSize uint64) (io.Reader, error) {
+	RegisterDecompressor(0x00, Decompressor(func(r []io.Reader, options []byte, unpackSize uint64, ro *ReaderOptions) (io.Reader, error) {
 		if len(r) != 1 {
 			return nil, ErrNotSupported
 		}
@@ -30,7 +30,7 @@ func init() {
 	}))
 
 	// delta
-	RegisterDecompressor(0x03, Decompressor(func(r []io.Reader, options []byte, unpackSize uint64) (io.Reader, error) {
+	RegisterDecompressor(0x03, Decompressor(func(r []io.Reader, options []byte, unpackSize uint64, ro *ReaderOptions) (io.Reader, error) {
 		if len(r) != 1 || len(options) == 0 || len(options) > 1 {
 			return nil, ErrNotSupported
 		}
@@ -39,7 +39,7 @@ func init() {
 	}))
 
 	// lzma
-	RegisterDecompressor(0x030101, Decompressor(func(r []io.Reader, options []byte, unpackSize uint64) (io.Reader, error) {
+	RegisterDecompressor(0x030101, Decompressor(func(r []io.Reader, options []byte, unpackSize uint64, ro *ReaderOptions) (io.Reader, error) {
 		if len(r) != 1 {
 			return nil, ErrNotSupported
 		}
@@ -53,7 +53,7 @@ func init() {
 	}))
 
 	// lzma2
-	RegisterDecompressor(0x21, Decompressor(func(r []io.Reader, options []byte, unpackSize uint64) (io.Reader, error) {
+	RegisterDecompressor(0x21, Decompressor(func(r []io.Reader, options []byte, unpackSize uint64, ro *ReaderOptions) (io.Reader, error) {
 		if len(r) != 1 {
 			return nil, ErrNotSupported
 		}
@@ -68,7 +68,7 @@ func init() {
 	}))
 
 	// bcj2
-	RegisterDecompressor(0x303011b, Decompressor(func(r []io.Reader, options []byte, unpackSize uint64) (io.Reader, error) {
+	RegisterDecompressor(0x303011b, Decompressor(func(r []io.Reader, options []byte, unpackSize uint64, ro *ReaderOptions) (io.Reader, error) {
 		if len(r) != 4 {
 			return nil, ErrNotSupported
 		}
@@ -76,7 +76,7 @@ func init() {
 	}))
 
 	// deflate
-	RegisterDecompressor(0x40108, Decompressor(func(r []io.Reader, options []byte, unpackSize uint64) (io.Reader, error) {
+	RegisterDecompressor(0x40108, Decompressor(func(r []io.Reader, options []byte, unpackSize uint64, ro *ReaderOptions) (io.Reader, error) {
 		if len(r) != 1 {
 			return nil, ErrNotSupported
 		}
@@ -84,12 +84,32 @@ func init() {
 	}))
 
 	// bzip2
-	RegisterDecompressor(0x40202, Decompressor(func(r []io.Reader, options []byte, unpackSize uint64) (io.Reader, error) {
+	RegisterDecompressor(0x40202, Decompressor(func(r []io.Reader, options []byte, unpackSize uint64, ro *ReaderOptions) (io.Reader, error) {
 		if len(r) != 1 {
 			return nil, ErrNotSupported
 		}
 
 		return bzip2.NewReader(r[0]), nil
+	}))
+
+	// AES
+	RegisterDecompressor(0x6f10701, Decompressor(func(r []io.Reader, options []byte, unpackSize uint64, ro *ReaderOptions) (io.Reader, error) {
+		if len(r) != 1 {
+			return nil, ErrNotSupported
+		}
+		if len(options) < 2 {
+			return nil, ErrNotSupported
+		}
+
+		saltSize := ((options[0] >> 7) & 1) + (options[1] >> 4)
+		ivSize := ((options[0] >> 6) & 1) + (options[1] & 0x0F)
+		power := int(options[0]) & 0x3f
+
+		options = options[2:]
+		salt := options[:saltSize]
+		iv := options[saltSize : saltSize+ivSize]
+
+		return filters.NewAESDecrypter(r[0], power, salt, iv, ro.Password())
 	}))
 }
 
