@@ -8,7 +8,7 @@ import (
 	"io"
 	"sync"
 
-	"github.com/saracen/go7z/filters"
+	"github.com/francisco-alanis/go7z/filters"
 	"github.com/ulikunitz/xz/lzma"
 )
 

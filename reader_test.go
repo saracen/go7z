@@ -4,8 +4,6 @@ import (
 	"io"
 	"io/ioutil"
 	"testing"
-
-	"github.com/saracen/go7z-fixtures"
 )
 
 func TestOpenReader(t *testing.T) {

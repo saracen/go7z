@@ -77,7 +77,7 @@ func (km *keyManager) stretch(salt, password []byte) []byte {
 
 func (km *keyManager) sha256Stretch(power int, salt, password []byte) []byte {
 	var temp [8]byte
-	for round := 0; round < 1<<power; round++ {
+	for round := 0; round < 1<<uint(power); round++ {
 		km.hasher.Write(salt)
 		km.hasher.Write(password)
 		km.hasher.Write(temp[:])

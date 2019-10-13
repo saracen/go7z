@@ -9,7 +9,7 @@ import (
 	"os"
 	"sync"
 
-	"github.com/saracen/go7z/headers"
+	"github.com/francisco-alanis/go7z/headers"
 	"github.com/saracen/solidblock"
 )
 
