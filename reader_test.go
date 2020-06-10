@@ -5,7 +5,7 @@ import (
 	"io/ioutil"
 	"testing"
 
-	"github.com/saracen/go7z-fixtures"
+	fixtures "github.com/saracen/go7z-fixtures"
 )
 
 func TestOpenReader(t *testing.T) {
@@ -62,6 +62,42 @@ func TestReader(t *testing.T) {
 			}
 			if err != nil {
 				panic(err)
+			}
+
+			if _, err = io.Copy(ioutil.Discard, sz); err != nil {
+				t.Fatal(err)
+			}
+			count++
+		}
+
+		if count != f.Entries {
+			t.Fatalf("expected %v entries, got %v\n", f.Entries, count)
+		}
+	}
+}
+
+func TestSkipFile(t *testing.T) {
+	fs, closeall := fixtures.Fixtures([]string{"executable", "random"}, []string{})
+	defer closeall.Close()
+	for _, f := range fs {
+		sz, err := NewReader(f, f.Size)
+		if err != nil {
+			t.Fatalf("error reading %v: %v\n", f.Archive, err)
+		}
+
+		count := 0
+		for {
+			_, err := sz.Next()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if count%2 == 0 {
+				count++
+				continue
 			}
 
 			if _, err = io.Copy(ioutil.Discard, sz); err != nil {
