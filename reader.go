@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
+	"io/ioutil"
 	"os"
 	"sync"
 
@@ -344,6 +345,14 @@ func (sz *Reader) next() (*headers.FileInfo, error) {
 	sz.emptyStream = fileInfo.IsEmptyStream
 	if sz.emptyStream {
 		return fileInfo, nil
+	}
+
+	if sz.folders[sz.folderIndex].sb != nil {
+		// Discard remainig bytes for current file.
+		// TODO: we should check if the underlying reader supports Seek to improve performance when possible.
+		if _, err := io.Copy(ioutil.Discard, sz.folders[sz.folderIndex].sb); err != nil {
+			return nil, err
+		}
 	}
 
 	if sz.folders[sz.folderIndex].Next() == io.EOF {
